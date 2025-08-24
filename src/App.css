@@ -205,3 +205,23 @@ h1{ font-weight: 800; letter-spacing: .2px; }
 .quick-select option:disabled {
   color: #7086a6;        /* gris más legible para deshabilitados */
 }
+
+.console-box{
+  height: 220px;                /* alto visible; ajusta a gusto */
+  overflow: auto;
+  background: #0f141a;
+  border: 1px solid #2a3442;
+  border-radius: 12px;
+  padding: .6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: .9rem;
+}
+.console-line{ 
+  display:flex; 
+  gap:.6rem; 
+  padding:.15rem 0; 
+  border-bottom: 1px dashed #1c2430;
+}
+.console-line:last-child{ border-bottom: none; }
+.console-line .ts{ color:#9fb0c6; min-width: 72px; opacity:.9; }
+.console-line .msg{ color:#e6edf7; white-space: pre-wrap; }

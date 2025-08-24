@@ -29,8 +29,8 @@ function parseInstr(raw) {
     case "JMP":
     case "JZ":
     case "JNZ":
-    case "MULM": 
-    case "DIVM":  
+    case "MUL": 
+    case "DIV":  
       return { op, args: [Number.isFinite(num) ? num : 0] };
     default:
       return { op: "INVALID", args: [txt] };
@@ -46,7 +46,7 @@ function parseData(cell) {
 }
 
 /* ================= Config ================= */
-const sampleProgram = ["LOAD 2", "ADD 2", "STORE 15", "OUT", "HLT"]; // ojo: mem pequeña
+const sampleProgram = ["LOAD 2", "ADD 2", "STORE [7]", "OUT", "HLT"]; // ojo: mem pequeña
 const defaultMemSize = 16;
 
 /* ================= UI Aux ================= */
@@ -112,6 +112,7 @@ export default function VonNeumannSimulator() {
   LOAD X
   ADD Y
   STORE Z
+  OUT
   HLT`);
 
   const [vars, setVars] = useState({
@@ -130,6 +131,10 @@ export default function VonNeumannSimulator() {
   const accRef     = useRef(0);
   const memRef     = useRef(memory);
 
+  // Historial de consola
+  const [history, setHistory] = useState([]);   // [{ts: number, text: string}]
+  const historyEndRef = useRef(null);
+
   // Sincroniza refs al cambiar estado
   useEffect(() => { runningRef.current = running; }, [running]);
   useEffect(() => { haltedRef.current  = halted;  }, [halted]);
@@ -143,6 +148,20 @@ export default function VonNeumannSimulator() {
   // Limpieza global
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
 
+  // Cada vez que cambia lastAction, lo añadimos al historial (evitando duplicados consecutivos)
+  useEffect(() => {
+    if (!lastAction) return;
+    setHistory((h) => {
+      if (h.length && h[h.length - 1].text === lastAction) return h; // evita duplicado inmediato
+      const entry = { ts: Date.now(), text: lastAction };
+      return [...h, entry].slice(-1000); // guarda hasta 1000 líneas
+    });
+  }, [lastAction]);
+
+  // Autoscroll al final cuando se agrega una línea
+  /*useEffect(() => {
+    historyEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [history]);*/
 
   /* ===== Fases basadas en REFS ===== */
   function doFetch() {
@@ -177,6 +196,8 @@ export default function VonNeumannSimulator() {
     })();
   }
 
+
+  //Simulacion del ALU
   function doExecute() {
     setPhase("Execute");
     const { op, args } = parseInstr(irRef.current);
@@ -208,38 +229,20 @@ export default function VonNeumannSimulator() {
       }
 
       case "MUL": {
-        const v = acc * arg;
+        const v = accRef.current * arg;
         setACC(v);
         setLastAction(`EXEC: MUL #${arg} → ACC=${v}`);
         next();
         break;
       }
       case "DIV": {
-        const v = arg !== 0 ? Math.floor(acc / arg) : 0;
-        setACC(v);
-        setLastAction(`EXEC: DIV #${arg} → ACC=${v}`);
-        next();
-        break;
-      }
-
-      case "MULM": {
-        const m = parseData(memory[arg]);
-        const v = acc * m;
-        setACC(v);
-        setLastAction(`EXEC: MULM [${arg}]=${m} → ACC=${v}`);
-        next();
-        break;
-      }
-
-      case "DIVM": {
-        const m = parseData(memory[arg]);
-        if (m === 0) {
+        if (arg === 0) {
           setACC(0);
-          setLastAction(`EXEC: DIVM [${arg}]=${m} (÷0) → ACC=0`);
+          setLastAction(`EXEC: DIV #${arg} (÷0) → ACC=0`);
         } else {
-          const v = Math.trunc(acc / m);
+          const v = Math.trunc(accRef.current / arg); // o Math.floor
           setACC(v);
-          setLastAction(`EXEC: DIVM [${arg}]=${m} → ACC=${v}`);
+          setLastAction(`EXEC: DIV #${arg} → ACC=${v}`);
         }
         next();
         break;
@@ -357,12 +360,14 @@ export default function VonNeumannSimulator() {
     setACC(0);         accRef.current = 0;
     setLastAction("");
     setOutputs([]);
+    setHistory([]);
   }
   function clearMemory() {
     const empty = Array.from({ length: memSize }, () => "");
     setMemory(empty);
     memRef.current = empty;
     resetCPU();
+    setHistory([]); 
   }
   function loadSample() {
     const m = Array.from({ length: memSize }, () => "");
@@ -388,6 +393,7 @@ export default function VonNeumannSimulator() {
       "LOAD X",
       `${opCode} Y`,
       "STORE Z",
+      "OUT",
       "HLT",
     ].join("\n");
 
@@ -485,14 +491,7 @@ export default function VonNeumannSimulator() {
 
   return (
     <div className="app-dark min-h-screen w-full p-4">
-      <div className="mx-auto max-w-6xl">
-        <header className="topbar">
-          <div className="brand">Von Neumann Lab</div>
-          <nav className="tools">
-            <button className="btn-ghost" onClick={loadSample}>Load sample</button>
-            <button className="btn-ghost" onClick={clearMemory}>Clear</button>
-          </nav>
-        </header>
+      <div className="mx-auto max-w-6x1">
 
         <h1>Simulador visual: Máquina de Von Neumann</h1>
         <p className="subtitle">Ciclo <b>Fetch → Decode → Execute</b> con registros PC, IR y ACC. Memoria unificada para instrucciones y datos.</p>
@@ -630,6 +629,26 @@ export default function VonNeumannSimulator() {
             )}
           </Card>
         </div>
+        
+            <Card title="Consola (historial)">
+              <div className="console-box">
+                {history.length === 0 ? (
+                  <div className="muted">(sin mensajes aún)</div>
+                ) : (
+                  history.map((e, i) => (
+                    <div key={i} className="console-line">
+                      <span className="ts">{new Date(e.ts).toLocaleTimeString()}</span>
+                      <span className="msg">{e.text}</span>
+                    </div>
+                  ))
+                )}
+                <div ref={historyEndRef} />
+              </div>
+              <div style={{ marginTop: ".5rem", display: "flex", gap: ".5rem" }}>
+                <button className="btn" onClick={() => setHistory([])}>Limpiar consola</button>
+              </div>
+            </Card>
+
 
         <footer className="footer">
           Arquitectura de Von Neumann • Simulador didáctico en una sola página.
