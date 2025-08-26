@@ -1,4 +1,4 @@
-import VonNeumannSimulator from './VonNeumannSimulator';
+import VonNeumannSimulator from "./pages/VonNeumannSimulator";
 import './App.css';
 
 function App() {
