@@ -1,9 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* ================= Helpers + ISA ================= */
+/* =========================================================
+   HELPERS (Funciones de apoyo) + mini ISA (formato de instrucciones)
+   ========================================================= */
+
+// Mantiene un valor dentro del rango [min, max].
+// Ej: clamp(12, 0, 10) → 10; clamp(-3, 0, 10) → 0; clamp(5, 0, 10) → 5.
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+// Verifica si un valor es numérico válido (descarta NaN).
 const isNumber = (x) => typeof x === "number" && !Number.isNaN(x);
 
+// Convierte una instrucción cruda (texto/numero/vacío) en un objeto entendible.
+// - "ADD 2"  → { op: "ADD", args: [2] }
+// -  7       → { op: "DATA", args: [7] }   (dato en memoria)
+// -  "" / null → { op: "NOP", args: [] }   (no hace nada)
 function parseInstr(raw) {
   if (raw == null) return { op: "NOP", args: [] };
   if (typeof raw === "number") return { op: "DATA", args: [raw] };
@@ -14,14 +25,19 @@ function parseInstr(raw) {
   const arg = parts[1] !== undefined ? parts[1] : undefined;
   const num = arg !== undefined ? Number(arg) : undefined;
   switch (op) {
-    case "HLT":
-    case "NOP":
-    case "OUT":
+    // Instrucciones sin argumento
+    case "HLT": // Detener CPU
+    case "NOP": // Sin operación
+    case "OUT": // Enviar ACC a la salida
       return { op, args: [] };
+
+    // Inmediatas (usan número directo)
     case "LOAD":
     case "ADD":
     case "SUB":
       return { op, args: [Number.isFinite(num) ? num : 0] };
+
+    // Con argumento (lo trataremos como número; algunas son de memoria/salto)
     case "LOADI":
     case "ADDM":
     case "SUBM":
@@ -32,10 +48,15 @@ function parseInstr(raw) {
     case "MUL": 
     case "DIV":  
       return { op, args: [Number.isFinite(num) ? num : 0] };
+
+    // Instrucción no reconocida
     default:
       return { op: "INVALID", args: [txt] };
   }
 }
+
+// Intenta leer un número desde una celda de memoria (que puede ser string).
+// Si no puede, retorna 0 (evita NaN).
 function parseData(cell) {
   if (isNumber(cell)) return cell;
   if (typeof cell === "string") {
@@ -46,10 +67,15 @@ function parseData(cell) {
 }
 
 /* ================= Config ================= */
+// Programa de ejemplo muy corto (ayuda a probar rápido)
 const sampleProgram = ["LOAD 2", "ADD 2", "STORE [7]", "OUT", "HLT"]; // ojo: mem pequeña
 const defaultMemSize = 16;
 
-/* ================= UI Aux ================= */
+/* =========================================================
+   COMPONENTES DE UI AUXILIARES (presentación visual)
+   ========================================================= */
+
+// Contenedor con título (estética de tarjeta)
 function Card({ title, children }) {
   return (
     <div className="card">
@@ -58,6 +84,8 @@ function Card({ title, children }) {
     </div>
   );
 }
+
+// Muestra un “registro” (nombre + valor), con resaltado opcional para llamar la atención
 function Reg({ label, value, highlight }) {
   return (
     <div className={`reg ${highlight ? "ring" : ""}`}>
@@ -66,6 +94,10 @@ function Reg({ label, value, highlight }) {
     </div>
   );
 }
+
+// Cuadrícula de memoria editable. Resalta:
+// - la celda donde está el PC (instrucción actual)
+// - la celda objetivo según la instrucción (src/dest), p.ej. STORE → dest
 function MemoryGrid({ memory, pc, target, op, onEdit }) {
   return (
     <div className="memory">
@@ -88,26 +120,32 @@ function MemoryGrid({ memory, pc, target, op, onEdit }) {
   );
 }
 
-/* ================= Simulador ================= */
+/* =========================================================
+   SIMULADOR VON NEUMANN (ciclo Fetch → Decode → Execute)
+   ========================================================= */
+
 export default function VonNeumannSimulator() {
-  // Estado react
+  // ----------------- Estado principal (visible en la UI) -----------------
   const [memSize] = useState(defaultMemSize);
+  // Memoria unificada (instrucciones y datos conviven en el mismo arreglo)
   const [memory, setMemory] = useState(() =>
     Array.from({ length: defaultMemSize }, () => "")
   );
-  const [pc, setPC] = useState(0);
-  const [ir, setIR] = useState("NOP");
-  const [acc, setACC] = useState(0);
-  const [phase, setPhase] = useState("Idle"); // Idle | Fetch | Decode | Execute
-  const [running, setRunning] = useState(false);
-  const [halted, setHalted] = useState(false);
-  const [speedMs, setSpeedMs] = useState(600);
-  const [lastAction, setLastAction] = useState("");
-  const [outputs, setOutputs] = useState([]);
-  // Operación elegida para generar el programa
-  const [opQuick, setOpQuick] = useState("ADD"); // "ADD"
+  const [pc, setPC] = useState(0);            // Program Counter: apunta a la próxima instrucción
+  const [ir, setIR] = useState("NOP");        // Instruction Register: instrucción actual (texto)
+  const [acc, setACC] = useState(0);          // Acumulador (donde caen los resultados)
+  const [phase, setPhase] = useState("Idle"); // Fase del ciclo: Idle | Fetch | Decode | Execute
+  const [running, setRunning] = useState(false); // Ejecución automática activada
+  const [halted, setHalted] = useState(false);   // ¿CPU detenida por HLT o error?
+  const [speedMs, setSpeedMs] = useState(600);   // Retardo entre pasos automáticos
+  const [lastAction, setLastAction] = useState(""); // Última acción (texto para mostrar)
+  const [outputs, setOutputs] = useState([]);      // Buffer de salidas (OUT)
 
-    // === Editor y variables (X, Y, Z) ===
+  // Plantillas rápidas para generar programas en el editor (X op Y → Z)
+  const [opQuick, setOpQuick] = useState("ADD"); // Valor por defecto
+
+  // ----------------- Editor y variables del “programa fuente” -----------------
+  // Texto editable que luego se “compila” a memoria
   const [programText, setProgramText] = useState(`// X + Y = Z
   LOAD X
   ADD Y
@@ -115,12 +153,14 @@ export default function VonNeumannSimulator() {
   OUT
   HLT`);
 
+  // Variables de usuario (sus valores terminarán al final de la memoria)
   const [vars, setVars] = useState({
     X: 2,
     Y: 2,
   });
 
-  // REFS “vivas” para lectura en el bucle
+  // ----------------- Refs “vivas” (evitan problemas de cierres/closures) -----------------
+  // Se usan dentro del bucle automático para leer el estado actualizado SIN depender del render.
   const timerRef = useRef(null);
   const runningRef = useRef(false);
   const haltedRef  = useRef(false);
@@ -131,11 +171,11 @@ export default function VonNeumannSimulator() {
   const accRef     = useRef(0);
   const memRef     = useRef(memory);
 
-  // Historial de consola
+  // Historial de acciones (como una pequeña consola de eventos)
   const [history, setHistory] = useState([]);   // [{ts: number, text: string}]
   const historyEndRef = useRef(null);
 
-  // Sincroniza refs al cambiar estado
+  // ----------------- Mantener las refs sincronizadas con el estado -----------------
   useEffect(() => { runningRef.current = running; }, [running]);
   useEffect(() => { haltedRef.current  = halted;  }, [halted]);
   useEffect(() => { speedRef.current   = speedMs; }, [speedMs]);
@@ -145,42 +185,46 @@ export default function VonNeumannSimulator() {
   useEffect(() => { accRef.current     = acc;     }, [acc]);
   useEffect(() => { memRef.current     = memory;  }, [memory]);
 
-  // Limpieza global
+  // Limpieza del temporizador cuando el componente se desmonta (buenas prácticas)
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
 
-  // Cada vez que cambia lastAction, lo añadimos al historial (evitando duplicados consecutivos)
+  // Añade “lastAction” al historial (evita duplicados consecutivos)
   useEffect(() => {
     if (!lastAction) return;
     setHistory((h) => {
-      if (h.length && h[h.length - 1].text === lastAction) return h; // evita duplicado inmediato
+      if (h.length && h[h.length - 1].text === lastAction) return h; // evita repetir la misma línea
       const entry = { ts: Date.now(), text: lastAction };
-      return [...h, entry].slice(-1000); // guarda hasta 1000 líneas
+      return [...h, entry].slice(-1000); // guarda hasta 1000 líneas (tope razonable)
     });
   }, [lastAction]);
 
-  // Autoscroll al final cuando se agrega una línea
+  // Autoscroll al final (opcional, comentado para no forzar scroll en UI)
   /*useEffect(() => {
     historyEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [history]);*/
 
-  /* ===== Fases basadas en REFS ===== */
+  // ----------------- FASES DEL CICLO (Fetch → Decode → Execute) -----------------
+
+  // FETCH: lee la instrucción actual desde memoria[PC] y la coloca en IR.
+  // Nota: también actualizamos la ref irRef para que Decode la vea de inmediato.
   function doFetch() {
     setPhase("Fetch");
     const m = memRef.current;
     const p = pcRef.current;
     const instr = m[p];
     setIR(instr ?? "NOP");
-    // adelanta ref de IR inmediatamente para que Decode vea el valor actual
     irRef.current = instr ?? "NOP";
     setLastAction(`FETCH @${p}: ${instr || "NOP"}`);
   }
 
+  // DECODE: interpreta la instrucción almacenada en IR (no ejecuta efectos).
   function doDecode() {
     setPhase("Decode");
     const p = parseInstr(irRef.current);
     setLastAction(`DECODE: ${p.op}${p.args[0] !== undefined ? " " + p.args[0] : ""}`);
   }
 
+  // Utilidad para escribir memoria SIN esperar al próximo render (mantiene memRef alineada).
   function writeMem(addr, value) {
     const a = clamp(addr, 0, memSize - 1);
     setMemory((m) => {
@@ -188,7 +232,7 @@ export default function VonNeumannSimulator() {
       copy[a] = value;
       return copy;
     });
-    // sincroniza ref inmediatamente (para próximas lecturas)
+    // Sincroniza memoria “viva” para lecturas del mismo tick
     memRef.current = (() => {
       const c = memRef.current.slice();
       c[a] = value;
@@ -196,12 +240,14 @@ export default function VonNeumannSimulator() {
     })();
   }
 
-
-  //Simulacion del ALU
+  // EXECUTE: aplica la instrucción al estado (ACC/PC/Memoria/Salida).
+  // Usa refs para evitar leer valores “viejos” dentro del bucle setTimeout.
   function doExecute() {
     setPhase("Execute");
     const { op, args } = parseInstr(irRef.current);
     const arg = args[0];
+
+    // Avanza PC en instrucciones “lineales” (las de salto lo cambian por su cuenta)
     const next = () => {
       const newPC = clamp(pcRef.current + 1, 0, memSize - 1);
       setPC(newPC);
@@ -212,6 +258,7 @@ export default function VonNeumannSimulator() {
       case "NOP": setLastAction("EXEC: NOP"); next(); break;
 
       case "HLT":
+        // Detiene la CPU (no más pasos automáticos)
         setLastAction("EXEC: HLT (CPU detenida)");
         setHalted(true); haltedRef.current = true;
         setRunning(false); runningRef.current = false;
@@ -219,28 +266,33 @@ export default function VonNeumannSimulator() {
         break;
 
       case "LOAD":
+        // Carga inmediata: ACC ← arg
         setACC(arg); accRef.current = arg;
         setLastAction(`EXEC: LOAD #${arg} → ACC=${arg}`); next(); break;
 
       case "LOADI": {
+        // Carga desde memoria: ACC ← Mem[arg]
         const v = parseData(memRef.current[arg]);
         setACC(v); accRef.current = v;
         setLastAction(`EXEC: LOADI [${arg}] → ACC=${v}`); next(); break;
       }
 
       case "MUL": {
+        // Multiplicación inmediata: ACC ← ACC * arg
         const v = accRef.current * arg;
         setACC(v);
         setLastAction(`EXEC: MUL #${arg} → ACC=${v}`);
         next();
         break;
       }
+
       case "DIV": {
+        // División entera inmediata (protege división por 0)
         if (arg === 0) {
           setACC(0);
           setLastAction(`EXEC: DIV #${arg} (÷0) → ACC=0`);
         } else {
-          const v = Math.trunc(accRef.current / arg); // o Math.floor
+          const v = Math.trunc(accRef.current / arg); // división entera
           setACC(v);
           setLastAction(`EXEC: DIV #${arg} → ACC=${v}`);
         }
@@ -249,17 +301,20 @@ export default function VonNeumannSimulator() {
       }
 
       case "STORE":
+        // Guarda el valor del ACC en memoria[arg]
         writeMem(arg, accRef.current);
         setLastAction(`EXEC: STORE ACC(${accRef.current}) → [${arg}]`);
         next(); break;
 
       case "ADD": {
+        // Suma inmediata: ACC ← ACC + arg
         const v = accRef.current + arg;
         setACC(v); accRef.current = v;
         setLastAction(`EXEC: ADD #${arg} → ACC=${v}`); next(); break;
       }
 
       case "ADDM": {
+        // Suma desde memoria: ACC ← ACC + Mem[arg]
         const m = parseData(memRef.current[arg]);
         const v = accRef.current + m;
         setACC(v); accRef.current = v;
@@ -267,12 +322,14 @@ export default function VonNeumannSimulator() {
       }
 
       case "SUB": {
+        // Resta inmediata: ACC ← ACC - arg
         const v = accRef.current - arg;
         setACC(v); accRef.current = v;
         setLastAction(`EXEC: SUB #${arg} → ACC=${v}`); next(); break;
       }
 
       case "SUBM": {
+        // Resta desde memoria: ACC ← ACC - Mem[arg]
         const m = parseData(memRef.current[arg]);
         const v = accRef.current - m;
         setACC(v); accRef.current = v;
@@ -280,12 +337,14 @@ export default function VonNeumannSimulator() {
       }
 
       case "JMP":
+        // Salto incondicional: PC ← arg (no se llama next)
         setPC(clamp(arg, 0, memSize - 1));
         pcRef.current = clamp(arg, 0, memSize - 1);
         setLastAction(`EXEC: JMP → PC=${arg}`);
         break;
 
       case "JZ":
+        // Salta si ACC == 0
         if (accRef.current === 0) {
           setPC(clamp(arg, 0, memSize - 1));
           pcRef.current = clamp(arg, 0, memSize - 1);
@@ -294,6 +353,7 @@ export default function VonNeumannSimulator() {
         break;
 
       case "JNZ":
+        // Salta si ACC != 0
         if (accRef.current !== 0) {
           setPC(clamp(arg, 0, memSize - 1));
           pcRef.current = clamp(arg, 0, memSize - 1);
@@ -302,13 +362,17 @@ export default function VonNeumannSimulator() {
         break;
 
       case "OUT":
+        // Envía el contenido del ACC a la zona de salida (se conserva historial de hasta 50)
         setLastAction(`EXEC: OUT → ${accRef.current}`);
         setOutputs((o) => [...o, accRef.current].slice(-50));
         next(); break;
 
-      case "DATA": setLastAction("EXEC: DATA (sin efecto)"); next(); break;
+      case "DATA":
+        // Dato en memoria (no se ejecuta; no tiene efecto por sí solo)
+        setLastAction("EXEC: DATA (sin efecto)"); next(); break;
 
       case "INVALID":
+        // Instrucción desconocida → se detiene por seguridad
         setLastAction("ERROR: instrucción inválida");
         setHalted(true); haltedRef.current = true;
         setRunning(false); runningRef.current = false;
@@ -316,6 +380,7 @@ export default function VonNeumannSimulator() {
         break;
 
       default:
+        // Caso no contemplado (protección)
         setLastAction(`ERROR: op desconocida ${op}`);
         setHalted(true); haltedRef.current = true;
         setRunning(false); runningRef.current = false;
@@ -323,7 +388,8 @@ export default function VonNeumannSimulator() {
     }
   }
 
-  // Un paso usando la fase desde ref (no se congela por closures)
+  // Un solo “paso” de ciclo según la fase actual.
+  // Idle/Execute → Fetch → Decode → Execute → (se repite)
   function stepOnce() {
     if (haltedRef.current) return;
     const ph = phaseRef.current;
@@ -332,7 +398,7 @@ export default function VonNeumannSimulator() {
     else if (ph === "Decode")                   doExecute();
   }
 
-  // Bucle automático con setTimeout
+  // Bucle automático (usa setTimeout en cadena, configurable con speedMs)
   useEffect(() => {
     if (!running || halted) return;
     let canceled = false;
@@ -345,11 +411,15 @@ export default function VonNeumannSimulator() {
     return () => { canceled = true; if (timerRef.current) clearTimeout(timerRef.current); };
   }, [running, halted]);
 
-  /* ===== Controles ===== */
+  /* ==================== Controles de la CPU ==================== */
+
+  // Alterna ejecución automática (play/pausa)
   function runToggle() {
     if (haltedRef.current) return;
-    setRunning((r) => !r); // el efecto arranca/para el bucle
+    setRunning((r) => !r);
   }
+
+  // Resetea la CPU (registros/fases/salida), NO borra la memoria
   function resetCPU() {
     if (timerRef.current) clearTimeout(timerRef.current);
     setRunning(false); runningRef.current = false;
@@ -362,6 +432,8 @@ export default function VonNeumannSimulator() {
     setOutputs([]);
     setHistory([]);
   }
+
+  // Limpia toda la memoria y resetea la CPU
   function clearMemory() {
     const empty = Array.from({ length: memSize }, () => "");
     setMemory(empty);
@@ -369,6 +441,8 @@ export default function VonNeumannSimulator() {
     resetCPU();
     setHistory([]); 
   }
+
+  // Carga el programa de ejemplo (útil para arrancar una demo al público)
   function loadSample() {
     const m = Array.from({ length: memSize }, () => "");
     for (let i = 0; i < sampleProgram.length && i < memSize; i++) m[i] = sampleProgram[i];
@@ -378,6 +452,7 @@ export default function VonNeumannSimulator() {
     setLastAction("Programa de ejemplo cargado");
   }
 
+  // Inserta en el editor una plantilla “X op Y → Z” según la operación elegida.
   function applyQuickTemplate(opCode) {
     let nice;
     switch (opCode) {
@@ -401,31 +476,36 @@ export default function VonNeumannSimulator() {
     setLastAction(`Plantilla insertada: ${opCode} con X e Y`);
   }
 
+  // Compila el texto del editor a memoria:
+  // 1) Limpia comentarios y líneas vacías
+  // 2) Reserva direcciones para X, Y, Z al final
+  // 3) Resuelve argumentos como “valor” o “dirección” según la instrucción
+  // 4) Escribe X, Y, Z en memoria
+  // 5) Carga y resetea CPU
   function compileAndLoad() {
-    // 1) Limpia el texto: quita comentarios // y líneas vacías
+    // 1) Limpia el texto fuente
     const lines = programText
       .split("\n")
       .map((l) => l.split("//")[0].trim())
       .filter((l) => l.length > 0);
 
-    // 2) Direcciones para X, Y, Z a partir del final del programa
+    // 2) Direcciones para X, Y, Z (se ubican a continuación del programa)
     let dataBase = lines.length;
     const X_ADDR = dataBase++;
     const Y_ADDR = dataBase++;
     const Z_ADDR = dataBase++;
 
-    // Si no cabe en memoria, avisa y no cargues
+    // Verificación de tamaño (evita desbordar memoria)
     if (dataBase > memSize) {
       setLastAction("El programa y datos no caben en la memoria actual.");
       return;
     }
 
-    // 3) Ensamblado simple: resuelve nombres
-    // LOAD/ADD/SUB usan valor inmediato de la variable
-    // STORE/LOADI/ADDM/SUBM/JMP/JZ/JNZ usan dirección
+    // 3) Ensamblado simple: decide si arg es valor (inmediato) o dirección (memoria/saltos)
     const addrOps = new Set(["LOADI","ADDM","SUBM","STORE","JMP","JZ","JNZ"]);
     const mem = Array.from({ length: memSize }, () => "");
 
+    // Convierte nombres X/Y/Z a su valor actual
     const resolveVarToValue = (name) => {
       const key = String(name).toUpperCase();
       if (key === "X") return Number(vars.X) || 0;
@@ -434,6 +514,8 @@ export default function VonNeumannSimulator() {
       const n = Number(name);
       return Number.isFinite(n) ? n : 0;
     };
+
+    // Convierte nombres X/Y/Z a su dirección de memoria
     const resolveVarToAddr = (name) => {
       const key = String(name).toUpperCase();
       if (key === "X") return X_ADDR;
@@ -443,45 +525,49 @@ export default function VonNeumannSimulator() {
       return Number.isFinite(n) ? clamp(n, 0, memSize - 1) : 0;
     };
 
+    // Recorre cada línea del programa y traduce a forma “OP <arg>” o “OP”
     for (let i = 0; i < lines.length && i < memSize; i++) {
       const parts = lines[i].replace(/\s+/g, " ").split(" ");
       const op = (parts[0] || "").toUpperCase();
       const rawArg = parts[1];
 
       if (rawArg === undefined) {
-        mem[i] = op; // HLT, NOP, OUT...
+        mem[i] = op; // Ej: HLT, NOP, OUT sin argumento
       } else {
         const arg = addrOps.has(op)
-          ? resolveVarToAddr(rawArg)
-          : resolveVarToValue(rawArg);
+          ? resolveVarToAddr(rawArg)   // instrucciones que requieren DIRECCIÓN
+          : resolveVarToValue(rawArg); // instrucciones inmediatas (VALOR)
         mem[i] = `${op} ${arg}`;
       }
     }
 
-    // 4) Escribe valores de X, Y, Z en sus direcciones
+    // 4) Escribe los valores de X, Y, Z en sus direcciones
     mem[X_ADDR] = Number(vars.X) || 0;
     mem[Y_ADDR] = Number(vars.Y) || 0;
     mem[Z_ADDR] = Number(vars.Z) || 0;
 
-    // 5) Carga memoria y resetea CPU
+    // 5) Carga memoria y resetea la CPU (listo para ejecutar)
     setMemory(mem);
     resetCPU();
     setLastAction("Programa compilado y cargado");
   }
 
-
+  // Permite editar manualmente celdas de memoria desde la UI (acepta número o texto).
   function onEditCell(i, value) {
     setMemory((m) => {
       const copy = m.slice();
       const asNum = Number(value);
       copy[i] = value.trim() === "" ? "" : (Number.isFinite(asNum) ? asNum : value);
-      memRef.current = copy; // sincroniza ref
+      memRef.current = copy; // sincroniza ref inmediatamente
       return copy;
     });
   }
 
-  // Para resaltar destino/operación actual
+  // ----------------- Cálculos memoizados para resaltar celdas en UI -----------------
   const parsedIR = useMemo(() => parseInstr(ir), [ir]);
+
+  // Si la instrucción actual usa dirección (LOADI/STORE/ADDM/SUBM/JMP/JZ/JNZ),
+  // calculamos la dirección objetivo para resaltarla en el grid.
   const targetAddr = useMemo(() => {
     const { op, args } = parsedIR;
     const addrOps = new Set(["LOADI", "ADDM", "SUBM", "STORE", "JMP", "JZ", "JNZ"]);
@@ -489,6 +575,7 @@ export default function VonNeumannSimulator() {
     return null;
   }, [parsedIR, memSize]);
 
+  // ==================== RENDER UI ====================
   return (
     <div className="app-dark min-h-screen w-full p-4">
       <div className="mx-auto max-w-6x1">
@@ -496,7 +583,7 @@ export default function VonNeumannSimulator() {
         <h1>Simulador visual: Máquina de Von Neumann</h1>
         <p className="subtitle">Ciclo <b>Fetch → Decode → Execute</b> con registros PC, IR y ACC. Memoria unificada para instrucciones y datos.</p>
 
-        {/* Fila superior: Registros + Ejecución */}
+        {/* Fila superior: Registros + Controles de ejecución */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <Card title="Registros">
             <div className="regs">
@@ -512,14 +599,24 @@ export default function VonNeumannSimulator() {
 
           <Card title="Ejecución">
             <div className="controls">
+              {/* Paso manual: avanza una fase */}
               <button className="btn" onClick={stepOnce} disabled={halted}>Paso</button>
+
+              {/* Alternar ejecución automática */}
               <button className="btn" onClick={runToggle} disabled={halted}>
                 {running ? "Pausar" : "Ejecutar"}
               </button>
+
+              {/* Reset de CPU (no borra memoria) */}
               <button className="btn" onClick={resetCPU}>Reset</button>
+
+              {/* Limpia memoria por completo */}
               <button className="btn" onClick={clearMemory}>Limpiar memoria</button>
             </div>
+
             <div className="note"><b>Última acción:</b> {lastAction || "(aún nada)"}</div>
+
+            {/* Control de velocidad del bucle automático */}
             <div className="speed">
               <label>Velocidad</label>
               <input type="range" min={150} max={1500} value={speedMs} onChange={(e)=>setSpeedMs(Number(e.target.value))} />
@@ -528,9 +625,9 @@ export default function VonNeumannSimulator() {
           </Card>
         </div>
 
-        {/* Editor de programa + variables */}
+        {/* Editor de programa + variables (X, Y, Z) */}
         <Card title="Programa y variables">
-            {/* === NUEVO: constructor rápido === */}
+            {/* Constructor rápido de programas (inserta plantilla en el editor) */}
             <div className="quick-row">
               <label className="quick-label">
                 Operación
@@ -550,11 +647,11 @@ export default function VonNeumannSimulator() {
                 Insertar en editor
               </button>
             </div>
-            {/* === FIN NUEVO === */}
+            {/* Fin constructor rápido */}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {/* Editor */}
+            {/* Editor de texto del “programa fuente” */}
             <div>
               <textarea
                 className="codearea"
@@ -578,13 +675,14 @@ export default function VonNeumannSimulator() {
                   Ejemplo
                 </button>
               </div>
+              {/* Aclaración clave para entender cómo se resuelven los nombres */}
               <p className="muted" style={{ fontSize: ".85rem", marginTop: ".5rem" }}>
                 Regla: en <b>LOAD/ADD/SUB</b> el nombre usa su <b>valor</b>. En
                 <b> STORE/LOADI/ADDM/SUBM/JMP/JZ/JNZ</b> el nombre usa su <b>dirección</b>.
               </p>
             </div>
 
-            {/* Variables (X, Y, Z) */}
+            {/* Tabla para asignar valores a X y Y (Z se calcula) */}
             <div>
               <table className="varTable">
                 <thead>
@@ -612,14 +710,14 @@ export default function VonNeumannSimulator() {
           </div>
         </Card>
 
-
-
-        {/* Fila inferior: Memoria + OUT */}
+        {/* Fila inferior: Memoria y salida OUT */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card title="Memoria">
+            {/* Muestra la memoria completa con resaltados de PC y dirección objetivo */}
             <MemoryGrid memory={memory} pc={pc} target={targetAddr} op={parsedIR.op} onEdit={onEditCell} />
           </Card>
           <Card title="Salida (OUT)">
+            {/* Lista de valores enviados por la instrucción OUT */}
             {outputs.length === 0 ? (
               <div className="muted">(sin salida)</div>
             ) : (
@@ -630,32 +728,34 @@ export default function VonNeumannSimulator() {
           </Card>
         </div>
         
-            <Card title="Consola (historial)">
-              <div className="console-box">
-                {history.length === 0 ? (
-                  <div className="muted">(sin mensajes aún)</div>
-                ) : (
-                  history.map((e, i) => (
-                    <div key={i} className="console-line">
-                      <span className="ts">{new Date(e.ts).toLocaleTimeString()}</span>
-                      <span className="msg">{e.text}</span>
-                    </div>
-                  ))
-                )}
-                <div ref={historyEndRef} />
-              </div>
-              <div style={{ marginTop: ".5rem", display: "flex", gap: ".5rem" }}>
-                <button className="btn" onClick={() => setHistory([])}>Limpiar consola</button>
-              </div>
-            </Card>
-
+        {/* Consola con historial de acciones (útil para explicar paso a paso en la exposición) */}
+        <Card title="Consola (historial)">
+          <div className="console-box">
+            {history.length === 0 ? (
+              <div className="muted">(sin mensajes aún)</div>
+            ) : (
+              history.map((e, i) => (
+                <div key={i} className="console-line">
+                  <span className="ts">{new Date(e.ts).toLocaleTimeString()}</span>
+                  <span className="msg">{e.text}</span>
+                </div>
+              ))
+            )}
+            <div ref={historyEndRef} />
+          </div>
+          <div style={{ marginTop: ".5rem", display: "flex", gap: ".5rem" }}>
+            <button className="btn" onClick={() => setHistory([])}>Limpiar consola</button>
+          </div>
+        </Card>
 
         <footer className="footer">
           Arquitectura de Von Neumann • Simulador didáctico en una sola página.
         </footer>
       </div>
 
-      {/* Estilos mínimos (compatibles con tu App.css) */}
+      {/* =========================================================
+          Estilos mínimos (ya integrados para que funcione “plug & play”)
+         ========================================================= */}
       <style>{`
         .app-dark{ --bg:#0f1115; --panel:#12151b; --panel2:#0f141a; --text:#e6edf7; --muted:#9fb0c6;
                    --line:#2a3442; --accent:#1e293b; --accent2:#334155; }
