@@ -553,7 +553,7 @@ export default function VonNeumannSimulator() {
               {/* Regla clave para explicar en la exposición */}
               <p className="muted" style={{ fontSize: ".85rem", marginTop: ".5rem" }}>
                 Regla: en <b>LOAD/ADD/SUB</b> el nombre usa su <b>valor</b>. En
-                <b> STORE/LOADI/ADDM/SUBM/JMP/JZ/JNZ</b> el nombre usa su <b>dirección</b>.
+                <b> STORE</b> el nombre usa su <b>dirección</b>.
               </p>
             </div>
 
